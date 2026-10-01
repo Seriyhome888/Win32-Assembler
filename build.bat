@@ -18,6 +18,7 @@ assembler.exe test_branches.asm test_branches.obj
 assembler.exe test_stack_extern.asm stack_test.obj
 
 assembler.exe test_ultimate.asm test_ultimate.obj
+assembler.exe test_bss.asm test_bss.obj
 
 linker.exe math_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" math_test.obj
 linker.exe loop_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" loop_test.obj
@@ -26,6 +27,7 @@ linker.exe test_string.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26
 linker.exe test_je.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_je.obj
 linker.exe test_branches.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_branches.obj
 linker.exe test_ultimate.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_ultimate.obj
+linker.exe test_bss.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_bss.obj
 
 math_app.exe
 echo %errorlevel%
@@ -46,4 +48,7 @@ test_branches.exe
 echo %errorlevel%
 
 test_ultimate.exe
+echo %errorlevel%
+
+test_bss.exe
 echo %errorlevel%
