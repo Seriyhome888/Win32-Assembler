@@ -105,11 +105,11 @@ void sym_insert(const char *name, uint32_t address, int16_t sec, uint8_t storage
         return;
     }
     uint32_t id = coff_sym_count++;
-    memset(&coff_syms[id], 0, sizeof(COFFSymbol));
-    strncpy(coff_syms[id].Name.ShortName, name, 8);
-    coff_syms[id].Value = address;
-    coff_syms[id].SectionNumber = sec;
-    coff_syms[id].StorageClass = storage_class;
+    memset(coff_syms + id, 0, sizeof(COFFSymbol));
+    strncpy((coff_syms + id)->Name.ShortName, name, 8);
+    (coff_syms + id)->Value = address;
+    (coff_syms + id)->SectionNumber = sec;
+    (coff_syms + id)->StorageClass = storage_class;
 
     uint32_t index = hash_string(name);
     SymbolNode *node = malloc(sizeof(SymbolNode));
@@ -123,10 +123,10 @@ void sym_insert(const char *name, uint32_t address, int16_t sec, uint8_t storage
 
 void emit_byte(uint8_t b) {
     if (current_section == 1) {
-        if (current_pass == 2 && text_size < BUFFER_SIZE) text_bytes[text_size] = b;
+        if (current_pass == 2 && text_size < BUFFER_SIZE) *(text_bytes + text_size) = b;
         text_size++;
     } else {
-        if (current_pass == 2 && data_size < BUFFER_SIZE) data_bytes[data_size] = b;
+        if (current_pass == 2 && data_size < BUFFER_SIZE) *(data_bytes + data_size) = b;
         data_size++;
     }
 }
@@ -151,8 +151,8 @@ void clean_line(char *line) {
     char *comment = strchr(line, ';');
     if (comment) *comment = '\0';
     if (strstr(line, "db") && strchr(line, '"')) return;
-    for (int i = 0; line[i]; i++) {
-        if (line[i] == ',' || line[i] == '[' || line[i] == ']') line[i] = ' ';
+    for (int i = 0; *(line + i); i++) {
+        if (*(line + i) == ',' || *(line + i) == '[' || *(line + i) == ']') *(line + i) = ' ';
     }
 }
 
@@ -161,7 +161,6 @@ void assemble_line(char *line) {
     strncpy(mutable_line, line, sizeof(mutable_line) - 1);
     mutable_line[sizeof(mutable_line) - 1] = '\0';
 
-    // Tokenize cleanly using robust sequential strtok pointers
     char *tokens[4] = {NULL, NULL, NULL, NULL};
     char *token = strtok(mutable_line, " \t\r\n");
     int tok_idx = 0;
@@ -173,7 +172,6 @@ void assemble_line(char *line) {
     if (tok_idx == 0) return;
     char *cmd = tokens[0];
 
-    // Handle section shifts
     if (strcmp(cmd, "section") == 0) {
         if (tok_idx > 1) {
             if (strcmp(tokens[1], ".text") == 0) current_section = 1;
@@ -183,7 +181,6 @@ void assemble_line(char *line) {
     }
     if (strcmp(cmd, "global") == 0 || strcmp(cmd, "extern") == 0) return;
 
-    // Handle data segment labels
     if (current_section == 2) {
         char *lbl = strchr(line, ':');
         if (lbl) {
@@ -209,7 +206,6 @@ void assemble_line(char *line) {
         return;
     }
 
-    // Handle text segment labels
     size_t cmd_len = strlen(cmd);
     if (cmd_len > 1 && cmd[cmd_len - 1] == ':') {
         if (current_pass == 1) {
@@ -294,6 +290,16 @@ void assemble_line(char *line) {
         return;
     }
 
+    // --- INTEGRATED LOGICAL INVERSION OPERATORS (not / neg) ---
+    if (strcmp(cmd, "not") == 0 || strcmp(cmd, "neg") == 0) {
+        int r = get_reg_id(tokens[1]);
+        if (r >= 0) {
+            emit_byte(0xF7); // Primary shared multi-byte group opcode
+            emit_byte((strcmp(cmd, "not") == 0 ? 0xD0 : 0xD8) + r); // /2 ModR/M extension for NOT, /3 for NEG
+        }
+        return;
+    }
+
     if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
         int dst = get_reg_id(tokens[1]);
         int is_shr = (strcmp(cmd, "shr") == 0);
@@ -306,15 +312,14 @@ void assemble_line(char *line) {
     }
 
     if (strcmp(cmd, "cmp") == 0) {
-        int dst = get_reg_id(tokens[1]);
-        if (dst >= 0 && tokens[2]) {
-            emit_byte(0x83); emit_byte(0xF8 + dst);
-            emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "call") == 0) {
+int dst = get_reg_id(tokens[1]);
+if (dst >= 0 && tokens[2]) {
+emit_byte(0x83); emit_byte(0xF8 + dst);
+emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
+}
+return;
+}
+if (strcmp(cmd, "call") == 0) {
 uint32_t instr_start_addr = (uint32_t)text_size;
 emit_byte(0xE8);
 if (current_pass == 2 && tokens[1]) {
@@ -347,7 +352,8 @@ return;
 }
 int main(int argc, char **argv) {
 if (argc < 3) {
-printf("Usage: %s <in.asm> <out.obj>\n", argv[0]);
+char *executable_name = argv[0];
+printf("Usage: %s <in.asm> <out.obj>\n", executable_name);
 return 1;
 }
 char *in_filename = argv[1];
