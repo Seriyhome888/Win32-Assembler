@@ -137,6 +137,7 @@ void emit_uint32(uint32_t val) {
 }
 
 int get_reg_id(const char *reg_name) {
+    if (!reg_name) return -1;
     if (strcmp(reg_name, "eax") == 0) return 0;
     if (strcmp(reg_name, "ecx") == 0) return 1;
     if (strcmp(reg_name, "edx") == 0) return 2;
@@ -156,58 +157,68 @@ void clean_line(char *line) {
 }
 
 void assemble_line(char *line) {
-    char tokens[4][64];
-    memset(tokens, 0, sizeof(tokens));
-    char peek[64] = {0};
-    if (sscanf(line, "%63s", peek) <= 0) return;
+    char mutable_line[256];
+    strncpy(mutable_line, line, sizeof(mutable_line) - 1);
+    mutable_line[sizeof(mutable_line) - 1] = '\0';
 
-    if (strcmp(peek, "section") == 0) {
-        char sec_name[64] = {0};
-        sscanf(line, "section %63s", sec_name);
-        if (strcmp(sec_name, ".text") == 0) current_section = 1;
-        if (strcmp(sec_name, ".data") == 0) current_section = 2;
+    // Tokenize cleanly using robust sequential strtok pointers
+    char *tokens[4] = {NULL, NULL, NULL, NULL};
+    char *token = strtok(mutable_line, " \t\r\n");
+    int tok_idx = 0;
+    while (token && tok_idx < 4) {
+        tokens[tok_idx++] = token;
+        token = strtok(NULL, " \t\r\n");
+    }
+
+    if (tok_idx == 0) return;
+    char *cmd = tokens[0];
+
+    // Handle section shifts
+    if (strcmp(cmd, "section") == 0) {
+        if (tok_idx > 1) {
+            if (strcmp(tokens[1], ".text") == 0) current_section = 1;
+            if (strcmp(tokens[1], ".data") == 0) current_section = 2;
+        }
         return;
     }
-    if (strcmp(peek, "global") == 0 || strcmp(peek, "extern") == 0) return;
+    if (strcmp(cmd, "global") == 0 || strcmp(cmd, "extern") == 0) return;
 
+    // Handle data segment labels
     if (current_section == 2) {
         char *lbl = strchr(line, ':');
         if (lbl) {
             *lbl = '\0';
             char lbl_name[64] = {0};
-            sscanf(line, "%63s", lbl_name);
-            if (current_pass == 1) sym_insert(lbl_name, (uint32_t)data_size, 2, 3);
-            char *payload = lbl + 1;
-            char op[32] = {0};
-            sscanf(payload, "%31s", op);
-            if (strcmp(op, "db") == 0) {
-                char *str_start = strchr(payload, '"');
-                if (str_start) {
-                    char *str_end = strchr(str_start + 1, '"');
-                    if (str_end) {
-                        for (char *c = str_start + 1; c < str_end; c++) emit_byte((uint8_t)*c);
+            if (sscanf(line, "%63s", lbl_name) > 0) {
+                if (current_pass == 1) sym_insert(lbl_name, (uint32_t)data_size, 2, 3);
+                char *payload = lbl + 1;
+                char op[32] = {0};
+                sscanf(payload, "%31s", op);
+                if (strcmp(op, "db") == 0) {
+                    char *str_start = strchr(payload, '"');
+                    if (str_start) {
+                        char *str_end = strchr(str_start + 1, '"');
+                        if (str_end) {
+                            for (char *c = str_start + 1; c < str_end; c++) emit_byte((uint8_t)*c);
+                        }
                     }
+                    if (strstr(payload, ", 0") || strstr(payload, ",0")) emit_byte(0x00);
                 }
-                if (strstr(payload, ", 0") || strstr(payload, ",0")) emit_byte(0x00);
             }
         }
         return;
     }
 
-    size_t peek_len = strlen(peek);
-    if (peek_len > 1 && peek[peek_len - 1] == ':') {
+    // Handle text segment labels
+    size_t cmd_len = strlen(cmd);
+    if (cmd_len > 1 && cmd[cmd_len - 1] == ':') {
         if (current_pass == 1) {
             char clean_lbl[64] = {0};
-            strncpy(clean_lbl, peek, peek_len - 1);
+            strncpy(clean_lbl, cmd, cmd_len - 1 < 63 ? cmd_len - 1 : 63);
             sym_insert(clean_lbl, (uint32_t)text_size, 1, 2);
         }
         return;
     }
-
-    int count = sscanf(line, "%63s %63s %63s %63s", tokens[0], tokens[1], tokens[2], tokens[3]);
-    if (count <= 0) return;
-
-    char *cmd = tokens[0];
 
     if (strcmp(cmd, "push") == 0) { int r = get_reg_id(tokens[1]); if (r>=0) emit_byte(0x50+r); return; }
     if (strcmp(cmd, "pop") == 0)  { int r = get_reg_id(tokens[1]); if (r>=0) emit_byte(0x58+r); return; }
@@ -218,7 +229,7 @@ void assemble_line(char *line) {
         int src = get_reg_id(tokens[2]);
         if (dst >= 0 && src >= 0) {
             emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src);
-        } else if (dst >= 0) {
+        } else if (dst >= 0 && tokens[2]) {
             SymbolNode *node;
             if (sym_lookup(tokens[2], &node) && node->section_num == 2) {
                 emit_byte(0xB8 + dst);
@@ -239,7 +250,7 @@ void assemble_line(char *line) {
 
     if (strcmp(cmd, "and") == 0) {
         int dst = get_reg_id(tokens[1]);
-        if (dst >= 0) {
+        if (dst >= 0 && tokens[2]) {
             emit_byte(0x83); emit_byte(0xE0 + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
@@ -252,7 +263,7 @@ void assemble_line(char *line) {
         if (dst >= 0 && src >= 0) {
             uint8_t op = (strcmp(cmd, "sub") == 0) ? 0x29 : 0x01;
             emit_byte(op); emit_byte(0xC0 + (src * 8) + dst);
-        } else if (dst >= 0) {
+        } else if (dst >= 0 && tokens[2]) {
             uint8_t op_extension = (strcmp(cmd, "sub") == 0) ? 0xE8 : 0xC0;
             emit_byte(0x83); emit_byte(op_extension + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
@@ -275,7 +286,7 @@ void assemble_line(char *line) {
         int is_xor = (strcmp(cmd, "xor") == 0);
         if (dst >= 0 && src >= 0) {
             emit_byte(is_xor ? 0x31 : 0x09); emit_byte(0xC0 + (src * 8) + dst);
-        } else if (dst >= 0) {
+        } else if (dst >= 0 && tokens[2]) {
             emit_byte(0x83);
             emit_byte((is_xor ? 0xF0 : 0xC8) + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
@@ -286,7 +297,7 @@ void assemble_line(char *line) {
     if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
         int dst = get_reg_id(tokens[1]);
         int is_shr = (strcmp(cmd, "shr") == 0);
-        if (dst >= 0) {
+        if (dst >= 0 && tokens[2]) {
             emit_byte(0xC1);
             emit_byte((is_shr ? 0xE8 : 0xE0) + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
@@ -296,26 +307,37 @@ void assemble_line(char *line) {
 
     if (strcmp(cmd, "cmp") == 0) {
         int dst = get_reg_id(tokens[1]);
-        if (dst >= 0) {
+        if (dst >= 0 && tokens[2]) {
             emit_byte(0x83); emit_byte(0xF8 + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
         return;
     }
 
-    uint8_t opcode = 0;
-    if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
-    else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
-    else if (strcmp(cmd, "jne") == 0 || strcmp(cmd, "jnz") == 0) opcode = 0x75;
-    else if (strcmp(cmd, "jl") == 0)  opcode = 0x7C;
-    else if (strcmp(cmd, "jg") == 0)  opcode = 0x7F;
-
-    if (opcode != 0) {
-        uint32_t instr_start_addr = (uint32_t)text_size;
-        emit_byte(opcode);
-        if (current_pass == 2) {
-            SymbolNode *node;
-            if (sym_lookup(tokens[1], &node)) {
+    if (strcmp(cmd, "call") == 0) {
+uint32_t instr_start_addr = (uint32_t)text_size;
+emit_byte(0xE8);
+if (current_pass == 2 && tokens[1]) {
+SymbolNode *node;
+if (sym_lookup(tokens[1], &node)) {
+uint32_t rel32_offset = node->address - (instr_start_addr + 5);
+emit_uint32(rel32_offset);
+} else { emit_uint32(0); }
+} else { emit_uint32(0); }
+return;
+}
+uint8_t opcode = 0;
+if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
+else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
+else if (strcmp(cmd, "jne") == 0 || strcmp(cmd, "jnz") == 0) opcode = 0x75;
+else if (strcmp(cmd, "jl") == 0)  opcode = 0x7C;
+else if (strcmp(cmd, "jg") == 0)  opcode = 0x7F;
+if (opcode != 0 && tokens[1]) {
+uint32_t instr_start_addr = (uint32_t)text_size;
+emit_byte(opcode);
+if (current_pass == 2) {
+SymbolNode *node;
+if (sym_lookup(tokens[1], &node)) {
 int8_t offset = (int8_t)((int32_t)node->address - ((int32_t)instr_start_addr + 2));
 emit_byte((uint8_t)offset);
 } else { emit_byte(0x00); }
@@ -324,18 +346,15 @@ return;
 }
 }
 int main(int argc, char **argv) {
-// Hardened pointer variable resolution to safely bypass markdown rendering bugs
 if (argc < 3) {
-char *executable_name = *(argv + 0);
-printf("Usage: %s <in.asm> <out.obj>\n", executable_name);
+printf("Usage: %s <in.asm> <out.obj>\n", argv[0]);
 return 1;
 }
-char *in_filename = *(argv + 1);
-char *out_filename = *(argv + 2);
+char *in_filename = argv[1];
+char *out_filename = argv[2];
 sym_insert(".text", 0, 1, 3);
 sym_insert(".data", 0, 2, 3);
-// FIXED: Properly dimensioned local stack array buffer definition
-char line[512];
+char line[256];
 // PASS 1
 current_pass = 1; text_size = 0; data_size = 0; current_section = 1;
 FILE *in = fopen(in_filename, "r");

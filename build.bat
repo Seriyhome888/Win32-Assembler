@@ -21,6 +21,7 @@ assembler.exe test_ultimate.asm test_ultimate.obj
 assembler.exe test_bss.asm test_bss.obj
 assembler.exe test_shifts.asm test_shifts.obj
 assembler.exe test_inc_dec.asm test_inc_dec.obj
+assembler.exe test_call.asm test_call.obj
 
 linker.exe math_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" math_test.obj
 linker.exe loop_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" loop_test.obj
@@ -32,6 +33,7 @@ linker.exe test_ultimate.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.
 linker.exe test_bss.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_bss.obj
 linker.exe test_shifts.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_shifts.obj
 linker.exe test_inc_dec.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_inc_dec.obj
+linker.exe test_call.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_call.obj
 
 math_app.exe
 echo %errorlevel%
@@ -61,4 +63,7 @@ test_shifts.exe
 echo %errorlevel%
 
 test_inc_dec.exe
+echo %errorlevel%
+
+test_call.exe
 echo %errorlevel%
