@@ -112,8 +112,8 @@ void clean_line(char *line) {
 }
 
 void assemble_line(char *line) {
-    char tokens[4][64] = {{0}};
-    int count = sscanf(line, "%63s %63s %63s %63s", tokens[0], tokens[1], tokens[2], tokens[3]);
+    char tokens[4][32] = {{0}};
+    int count = sscanf(line, "%31s %31s %31s %31s", tokens[0], tokens[1], tokens[2], tokens[3]);
     if (count <= 0) return;
 
     char *cmd = tokens[0];
@@ -123,7 +123,7 @@ void assemble_line(char *line) {
     size_t cmd_len = strlen(cmd);
     if (cmd_len > 1 && cmd[cmd_len - 1] == ':') {
         if (current_pass == 1) {
-            char clean_lbl[64] = {0};
+            char clean_lbl[32] = {0};
             strncpy(clean_lbl, cmd, cmd_len - 1);
             sym_insert(clean_lbl, (uint32_t)text_size);
         }
@@ -149,7 +149,7 @@ void assemble_line(char *line) {
     if (strcmp(cmd, "and") == 0) {
         int dst = get_reg_id(tokens[1]);
         if (dst >= 0) { 
-            emit_byte(0x83); emit_byte(0xE0 + dst); 
+            emit_byte(0x83); emit_byte(0xE4 + dst); 
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0)); 
         }
         return;
@@ -172,7 +172,7 @@ void assemble_line(char *line) {
         if (dst >= 0 && src >= 0) {
             emit_byte(0x29); emit_byte(0xC0 + (src * 8) + dst);
         } else if (dst >= 0) {
-            emit_byte(0x83); emit_byte(0xE8 + dst); // Clean 8-step scaling ModR/M
+            emit_byte(0x83); emit_byte(0xE8 + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
         return;
@@ -187,9 +187,16 @@ void assemble_line(char *line) {
         return;
     }
 
-    // JNE Instruction block mapping 
-    if (strcmp(cmd, "jne") == 0) {
-        emit_byte(0x75);
+    // --- EXPANDED BRANCH MANAGEMENT SYSTEM (`jmp`, `je`, `jne`, `jl`, `jg`) ---
+    uint8_t opcode = 0;
+    if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
+    else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
+    else if (strcmp(cmd, "jne") == 0) opcode = 0x75;
+    else if (strcmp(cmd, "jl") == 0)  opcode = 0x7C;
+    else if (strcmp(cmd, "jg") == 0)  opcode = 0x7F;
+
+    if (opcode != 0) {
+        emit_byte(opcode);
         if (current_pass == 2) {
             uint32_t target;
             if (sym_lookup(tokens[1], &target)) {
@@ -247,6 +254,6 @@ int main(int argc, char **argv) {
     fwrite(&str_table_size, sizeof(str_table_size), 1, out);
     fclose(out);
 
-    printf("Built successfully. Math alignments and jumps patched cleanly.\n");
+    printf("Built successfully. Full conditional and unconditional branch arrays configured.\n");
     return 0;
 }
