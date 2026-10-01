@@ -7,6 +7,7 @@
 #define HASH_MAP_SIZE 128
 #define MAX_SYMBOLS 256
 #define MAX_RELOCS 256
+#define BUFFER_SIZE 8192
 
 #pragma pack(push, 1)
 typedef struct {
@@ -69,9 +70,9 @@ uint32_t coff_sym_count = 0;
 COFFRelocation text_relocs[MAX_RELOCS];
 uint32_t text_reloc_count = 0;
 
-uint8_t text_bytes[4096];
+uint8_t text_bytes[BUFFER_SIZE];
 size_t text_size = 0;
-uint8_t data_bytes[4096];
+uint8_t data_bytes[BUFFER_SIZE];
 size_t data_size = 0;
 
 int current_section = 1;
@@ -122,10 +123,10 @@ void sym_insert(const char *name, uint32_t address, int16_t sec, uint8_t storage
 
 void emit_byte(uint8_t b) {
     if (current_section == 1) {
-        if (current_pass == 2) text_bytes[text_size] = b;
+        if (current_pass == 2 && text_size < BUFFER_SIZE) text_bytes[text_size] = b;
         text_size++;
     } else {
-        if (current_pass == 2) data_bytes[data_size] = b;
+        if (current_pass == 2 && data_size < BUFFER_SIZE) data_bytes[data_size] = b;
         data_size++;
     }
 }
@@ -155,7 +156,8 @@ void clean_line(char *line) {
 }
 
 void assemble_line(char *line) {
-    char tokens[4][64] = {{{0}}};
+    char tokens[4][64];
+    memset(tokens, 0, sizeof(tokens));
     char peek[64] = {0};
     if (sscanf(line, "%63s", peek) <= 0) return;
 
@@ -172,7 +174,7 @@ void assemble_line(char *line) {
         char *lbl = strchr(line, ':');
         if (lbl) {
             *lbl = '\0';
-            char lbl_name[64];
+            char lbl_name[64] = {0};
             sscanf(line, "%63s", lbl_name);
             if (current_pass == 1) sym_insert(lbl_name, (uint32_t)data_size, 2, 3);
             char *payload = lbl + 1;
@@ -258,6 +260,15 @@ void assemble_line(char *line) {
         return;
     }
 
+    if (strcmp(cmd, "inc") == 0 || strcmp(cmd, "dec") == 0) {
+        int r = get_reg_id(tokens[1]);
+        if (r >= 0) {
+            uint8_t base_opcode = (strcmp(cmd, "inc") == 0) ? 0x40 : 0x48;
+            emit_byte(base_opcode + r);
+        }
+        return;
+    }
+
     if (strcmp(cmd, "xor") == 0 || strcmp(cmd, "or") == 0) {
         int dst = get_reg_id(tokens[1]);
         int src = get_reg_id(tokens[2]);
@@ -272,13 +283,12 @@ void assemble_line(char *line) {
         return;
     }
 
-    // --- BITWISE BITWISE SHIFT EXTENSIONS (shl / shr) ---
     if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
         int dst = get_reg_id(tokens[1]);
         int is_shr = (strcmp(cmd, "shr") == 0);
         if (dst >= 0) {
-            emit_byte(0xC1); // Opcode for multi-bit shift immediate 8
-            emit_byte((is_shr ? 0xE8 : 0xE0) + dst); // /4 for SHL, /5 for SHR
+            emit_byte(0xC1);
+            emit_byte((is_shr ? 0xE8 : 0xE0) + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
         return;
@@ -296,7 +306,7 @@ void assemble_line(char *line) {
     uint8_t opcode = 0;
     if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
     else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
-    else if (strcmp(cmd, "jne") == 0) opcode = 0x75;
+    else if (strcmp(cmd, "jne") == 0 || strcmp(cmd, "jnz") == 0) opcode = 0x75;
     else if (strcmp(cmd, "jl") == 0)  opcode = 0x7C;
     else if (strcmp(cmd, "jg") == 0)  opcode = 0x7F;
 
@@ -306,29 +316,39 @@ void assemble_line(char *line) {
         if (current_pass == 2) {
             SymbolNode *node;
             if (sym_lookup(tokens[1], &node)) {
-                int8_t offset = (int8_t)((int32_t)node->address - ((int32_t)instr_start_addr + 2));
-                emit_byte((uint8_t)offset);
-            } else { emit_byte(0x00); }
-        } else { emit_byte(0x00); }
-        return;
-    }
+int8_t offset = (int8_t)((int32_t)node->address - ((int32_t)instr_start_addr + 2));
+emit_byte((uint8_t)offset);
+} else { emit_byte(0x00); }
+} else { emit_byte(0x00); }
+return;
 }
-
+}
 int main(int argc, char **argv) {
-    if (argc < 3) { printf("Usage: %s <in.asm> <out.obj>\n", argv); return 1; }
-sym_insert(".text", 0, 1, 3); sym_insert(".data", 0, 2, 3);
+// Hardened pointer variable resolution to safely bypass markdown rendering bugs
+if (argc < 3) {
+char *executable_name = *(argv + 0);
+printf("Usage: %s <in.asm> <out.obj>\n", executable_name);
+return 1;
+}
+char *in_filename = *(argv + 1);
+char *out_filename = *(argv + 2);
+sym_insert(".text", 0, 1, 3);
+sym_insert(".data", 0, 2, 3);
+// FIXED: Properly dimensioned local stack array buffer definition
+char line[512];
+// PASS 1
 current_pass = 1; text_size = 0; data_size = 0; current_section = 1;
-FILE *in = fopen(argv[1], "r");
-if (!in) { perror("Input load error"); return 1; }
-char line[256];
+FILE *in = fopen(in_filename, "r");
+if (!in) { perror("Input assembly file failed to open"); return 1; }
 while (fgets(line, sizeof(line), in)) { clean_line(line); assemble_line(line); }
 rewind(in);
+// PASS 2
 current_pass = 2; size_t final_text_len = text_size; size_t final_data_len = data_size;
 text_size = 0; data_size = 0; current_section = 1;
 while (fgets(line, sizeof(line), in)) { clean_line(line); assemble_line(line); }
 fclose(in);
-FILE *out = fopen(argv[2], "wb");
-if (!out) { perror("Output initialization error"); return 1; }
+FILE *out = fopen(out_filename, "wb");
+if (!out) { perror("Output object file path opening failed"); return 1; }
 uint32_t header_bytes = sizeof(COFFHeader) + (sizeof(SectionHeader) * 2);
 uint32_t text_raw_ptr = header_bytes;
 uint32_t data_raw_ptr = text_raw_ptr + (uint32_t)final_text_len;
@@ -338,15 +358,20 @@ COFFHeader coff = {
 .PointerToSymbolTable = text_reloc_ptr + (sizeof(COFFRelocation) * text_reloc_count),
 .NumberOfSymbols = coff_sym_count, .SizeOfOptionalHeader = 0, .Characteristics = 0x0000
 };
-SectionHeader sec_text = {
-.Name = ".text", .SizeOfRawData = (uint32_t)final_text_len, .PointerToRawData = text_raw_ptr,
-.PointerToRelocations = text_reloc_count > 0 ? text_reloc_ptr : 0, .NumberOfRelocations = (uint16_t)text_reloc_count,
-.Characteristics = 0x60000020
-};
-SectionHeader sec_data = {
-.Name = ".data", .SizeOfRawData = (uint32_t)final_data_len, .PointerToRawData = data_raw_ptr,
-.Characteristics = 0xC0000040
-};
+SectionHeader sec_text;
+memset(&sec_text, 0, sizeof(sec_text));
+memcpy(sec_text.Name, ".text", 5);
+sec_text.SizeOfRawData = (uint32_t)final_text_len;
+sec_text.PointerToRawData = text_raw_ptr;
+sec_text.PointerToRelocations = text_reloc_count > 0 ? text_reloc_ptr : 0;
+sec_text.NumberOfRelocations = (uint16_t)text_reloc_count;
+sec_text.Characteristics = 0x60000020;
+SectionHeader sec_data;
+memset(&sec_data, 0, sizeof(sec_data));
+memcpy(sec_data.Name, ".data", 5);
+sec_data.SizeOfRawData = (uint32_t)final_data_len;
+sec_data.PointerToRawData = data_raw_ptr;
+sec_data.Characteristics = 0xC0000040;
 fwrite(&coff, sizeof(coff), 1, out);
 fwrite(&sec_text, sizeof(sec_text), 1, out);
 fwrite(&sec_data, sizeof(sec_data), 1, out);
@@ -357,6 +382,6 @@ fwrite(coff_syms, sizeof(COFFSymbol), coff_sym_count, out);
 uint32_t str_table_size = 4;
 fwrite(&str_table_size, sizeof(str_table_size), 1, out);
 fclose(out);
-printf("Assembler completed successfully with shl/shr bitwise shift capabilities!\n");
+printf("Success! Formatted COFF file generated cleanly at: %s\n", out_filename);
 return 0;
 }
