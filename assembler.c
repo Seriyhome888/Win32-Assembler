@@ -215,7 +215,7 @@ void assemble_line(char *line) {
         int dst = get_reg_id(tokens[1]);
         int src = get_reg_id(tokens[2]);
         if (dst >= 0 && src >= 0) {
-            emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src); // Corrected dynamic mov r32, rm32 mapping
+            emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src);
         } else if (dst >= 0) {
             SymbolNode *node;
             if (sym_lookup(tokens[2], &node) && node->section_num == 2) {
@@ -238,8 +238,7 @@ void assemble_line(char *line) {
     if (strcmp(cmd, "and") == 0) {
         int dst = get_reg_id(tokens[1]);
         if (dst >= 0) {
-            emit_byte(0x83);
-            emit_byte(0xE0 + dst); // FIXED: and uses extension /4
+            emit_byte(0x83); emit_byte(0xE0 + dst);
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
         return;
@@ -267,7 +266,19 @@ void assemble_line(char *line) {
             emit_byte(is_xor ? 0x31 : 0x09); emit_byte(0xC0 + (src * 8) + dst);
         } else if (dst >= 0) {
             emit_byte(0x83);
-            emit_byte((is_xor ? 0xF0 : 0xC8) + dst); // FIXED: /6 for xor, /1 for or
+            emit_byte((is_xor ? 0xF0 : 0xC8) + dst);
+            emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
+        }
+        return;
+    }
+
+    // --- BITWISE BITWISE SHIFT EXTENSIONS (shl / shr) ---
+    if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
+        int dst = get_reg_id(tokens[1]);
+        int is_shr = (strcmp(cmd, "shr") == 0);
+        if (dst >= 0) {
+            emit_byte(0xC1); // Opcode for multi-bit shift immediate 8
+            emit_byte((is_shr ? 0xE8 : 0xE0) + dst); // /4 for SHL, /5 for SHR
             emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
         }
         return;
@@ -304,13 +315,12 @@ void assemble_line(char *line) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3) { printf("Usage: %s <in.asm> <out.obj>\n", argv[0]); return 1; }
-    sym_insert(".text", 0, 1, 3); sym_insert(".data", 0, 2, 3);
-
-    current_pass = 1; text_size = 0; data_size = 0; current_section = 1;
-    FILE *in = fopen(argv[1], "r");
-    if (!in) { perror("Input load error"); return 1; }
-    char line[256];
+    if (argc < 3) { printf("Usage: %s <in.asm> <out.obj>\n", argv); return 1; }
+sym_insert(".text", 0, 1, 3); sym_insert(".data", 0, 2, 3);
+current_pass = 1; text_size = 0; data_size = 0; current_section = 1;
+FILE *in = fopen(argv[1], "r");
+if (!in) { perror("Input load error"); return 1; }
+char line[256];
 while (fgets(line, sizeof(line), in)) { clean_line(line); assemble_line(line); }
 rewind(in);
 current_pass = 2; size_t final_text_len = text_size; size_t final_data_len = data_size;
@@ -347,6 +357,6 @@ fwrite(coff_syms, sizeof(COFFSymbol), coff_sym_count, out);
 uint32_t str_table_size = 4;
 fwrite(&str_table_size, sizeof(str_table_size), 1, out);
 fclose(out);
-printf("Ultimate Fixed Assembler Success!\n");
+printf("Assembler completed successfully with shl/shr bitwise shift capabilities!\n");
 return 0;
 }
