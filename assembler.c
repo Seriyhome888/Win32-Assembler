@@ -536,6 +536,57 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
+
+	// --- INTEGRATED EQUATE DIRECTIVE (equ $ - label) ---
+	if (strcmp(cmd, "equ") == 0 || (tok_idx > 1 && strcmp(tokens[1], "equ") == 0)) {
+		char* equ_lbl = NULL;
+		char* equ_expr_start = NULL;
+
+		// Handle both formats: "label equ expression" or "equ expression" if label parsed prior
+		if (strcmp(tokens[1], "equ") == 0) {
+			equ_lbl = tokens[0];
+			equ_expr_start = tokens[2];
+		}
+		else {
+			// Fallback if the token indexing split it differently
+			equ_lbl = cmd;
+			equ_expr_start = tokens[1];
+		}
+
+		// Clean up the label name if it still contains a colon
+		size_t lbl_len = strlen(equ_lbl);
+		if (lbl_len > 0 && equ_lbl[lbl_len - 1] == ':') {
+			equ_lbl[lbl_len - 1] = '\0';
+		}
+
+		// Check if the expression contains the location counter '$'
+		char* dollar = strchr(line, '$');
+		char* minus = strchr(line, '-');
+
+		if (dollar && minus) {
+			// Isolate the target label name from the expression (e.g., "$ - msg" -> "msg")
+			char target_label[64] = { 0 };
+			// Skip white spaces after the minus sign
+			char* target_ptr = minus + 1;
+			while (*target_ptr == ' ' || *target_ptr == '\t') target_ptr++;
+
+			if (sscanf(target_ptr, "%63s", target_label) > 0) {
+				SymbolNode* target_node;
+				if (sym_lookup(target_label, &target_node)) {
+					// Calculate the size dynamically: Current Size minus Target Label Address
+					uint32_t current_loc = (current_section == 1) ? (uint32_t)text_size : (uint32_t)data_size;
+					uint32_t evaluated_size = current_loc - target_node->address;
+
+					if (current_pass == 1) {
+						// Insert the evaluated constant size into our symbol map as an absolute value
+						sym_insert(equ_lbl, evaluated_size, current_section, 3); // Storage class 3 (Static/Constant)
+					}
+				}
+			}
+		}
+		return;
+	}
+
 	uint8_t opcode = 0;
 	if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
 	else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
