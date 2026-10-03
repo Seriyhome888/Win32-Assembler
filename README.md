@@ -13,7 +13,7 @@ Scans the source file line-by-line. It strips comments and processes structural 
   * **Pass 2 (Bytecode Serialization & Fix-up Logging):** \
 Resets section layout counters to zero and performs a comprehensive secondary scan. It encodes assembly text strings into little-endian machine bytecode, populating text_bytes and data_bytes buffers. Simultaneously, it generates structural relocation metadata when it encounters symbols that depend on runtime link calculations.
 
-**2. Multi-File Linker Interoperability & Relocation**
+**2. Multi-File Linker Interoperability & Relocation** \
 Cross-file function invocations (e.g., call _AddTwoNumbers) cannot be evaluated at assemble time because the absolute destination address is unknown.
 
 * To resolve this, Pass 2 emits a 4-byte little-endian placeholder payload (00 00 00 00) inside the bytecode stream.
