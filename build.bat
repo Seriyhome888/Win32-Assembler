@@ -29,6 +29,7 @@ assembler.exe test_cmp.asm test_cmp.obj
 assembler.exe test_data.asm test_data.obj
 assembler.exe test_api.asm test_api.obj
 assembler.exe test_sizeof.asm test_sizeof.obj
+assembler.exe test_dynamic_sizeof.asm test_dynamic_sizeof.obj
 
 linker.exe math_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" math_test.obj
 linker.exe loop_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" loop_test.obj
@@ -47,6 +48,7 @@ linker.exe test_signed.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26
 linker.exe test_cmp.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_cmp.obj
 linker.exe test_data.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_data.obj
 linker.exe test_sizeof.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_sizeof.obj
+linker.exe test_dynamic_sizeof.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_dynamic_sizeof.obj
 
 rem linker.exe test_api.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_api.obj
 link.exe /subsystem:console /entry:main test_api.obj kernel32.lib /nodefaultlib /largeaddressaware:no
@@ -103,4 +105,7 @@ test_api.exe
 echo %errorlevel%
 
 test_sizeof.exe
+echo %errorlevel%
+
+test_dynamic_sizeof.exe
 echo %errorlevel%

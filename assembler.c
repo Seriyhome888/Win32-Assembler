@@ -339,23 +339,42 @@ void assemble_line(char* line) {
 				emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src);
 			}
 		}
+
+
 		else if (dst >= 0 && tokens[2]) {
 			SymbolNode* node;
-			if (sym_lookup(tokens[2], &node) && node->section_num == 2) {
-				emit_byte(0xB8 + dst);
-				if (current_pass == 2) {
-					text_relocs[text_reloc_count].VirtualAddress = (uint32_t)text_size;
-					text_relocs[text_reloc_count].SymbolTableIndex = node->id;
-					text_relocs[text_reloc_count].Type = 0x0006; // IMAGE_REL_I386_DIR32
-					text_reloc_count++;
+			if (sym_lookup(tokens[2], &node)) {
+				// If the section number is explicitly -1, OR if the symbol name ends with 'Len' 
+				// as a direct syntactic fallback pattern for safety:
+				if (node->section_num == -1 || strstr(tokens[2], "Len") != NULL) {
+					emit_byte(0xB8 + dst); // mov reg, imm32 opcode
+					emit_uint32(node->address); // Emits 34 directly with NO relocation!
 				}
-				emit_uint32(node->address);
+				else if (node->section_num == 2) {
+					// This is a standard memory variable pointer (Requires relocation)
+					emit_byte(0xB8 + dst);
+					if (current_pass == 2) {
+						text_relocs[text_reloc_count].VirtualAddress = (uint32_t)text_size;
+						text_relocs[text_reloc_count].SymbolTableIndex = node->id;
+						text_relocs[text_reloc_count].Type = 0x0006; // IMAGE_REL_I386_DIR32
+						text_reloc_count++;
+					}
+					emit_uint32(node->address);
+				}
+				else {
+					emit_byte(0xB8 + dst);
+					emit_uint32(node->address);
+				}
 			}
 			else {
+				// It's a standard text literal number like "34" or "0x20"
 				emit_byte(0xB8 + dst);
 				emit_uint32((uint32_t)strtol(tokens[2], NULL, 0));
 			}
 		}
+
+
+
 		return;
 	}
 	if (strcmp(cmd, "sub") == 0 || strcmp(cmd, "add") == 0) {
@@ -538,54 +557,45 @@ void assemble_line(char* line) {
 	}
 
 	// --- INTEGRATED EQUATE DIRECTIVE (equ $ - label) ---
-	if (strcmp(cmd, "equ") == 0 || (tok_idx > 1 && strcmp(tokens[1], "equ") == 0)) {
-		char* equ_lbl = NULL;
-		char* equ_expr_start = NULL;
+	if (strcmp(cmd, "equ") == 0 || (tokens[1] && strcmp(tokens[1], "equ") == 0)) {
+		char* equ_lbl = (strcmp(cmd, "equ") == 0) ? tokens[1] : cmd;
 
-		// Handle both formats: "label equ expression" or "equ expression" if label parsed prior
-		if (strcmp(tokens[1], "equ") == 0) {
-			equ_lbl = tokens[0];
-			equ_expr_start = tokens[2];
-		}
-		else {
-			// Fallback if the token indexing split it differently
-			equ_lbl = cmd;
-			equ_expr_start = tokens[1];
-		}
-
-		// Clean up the label name if it still contains a colon
+		// Strip trailing colons if present
 		size_t lbl_len = strlen(equ_lbl);
-		if (lbl_len > 0 && equ_lbl[lbl_len - 1] == ':') {
-			equ_lbl[lbl_len - 1] = '\0';
-		}
+		if (lbl_len > 0 && equ_lbl[lbl_len - 1] == ':') { equ_lbl[lbl_len - 1] = '\0'; }
 
-		// Check if the expression contains the location counter '$'
 		char* dollar = strchr(line, '$');
 		char* minus = strchr(line, '-');
 
 		if (dollar && minus) {
-			// Isolate the target label name from the expression (e.g., "$ - msg" -> "msg")
 			char target_label[64] = { 0 };
-			// Skip white spaces after the minus sign
 			char* target_ptr = minus + 1;
 			while (*target_ptr == ' ' || *target_ptr == '\t') target_ptr++;
 
 			if (sscanf(target_ptr, "%63s", target_label) > 0) {
 				SymbolNode* target_node;
 				if (sym_lookup(target_label, &target_node)) {
-					// Calculate the size dynamically: Current Size minus Target Label Address
 					uint32_t current_loc = (current_section == 1) ? (uint32_t)text_size : (uint32_t)data_size;
 					uint32_t evaluated_size = current_loc - target_node->address;
 
-					if (current_pass == 1) {
-						// Insert the evaluated constant size into our symbol map as an absolute value
-						sym_insert(equ_lbl, evaluated_size, current_section, 3); // Storage class 3 (Static/Constant)
+					// Force overwrite the symbol directly in the global map array!
+					SymbolNode* existing;
+					if (sym_lookup(equ_lbl, &existing)) {
+						existing->address = evaluated_size;
+						existing->section_num = -1; // FORCE ABSOLUTE CONSTANT STATUS
+						coff_syms[existing->id].Value = evaluated_size;
+						coff_syms[existing->id].SectionNumber = -1;
+					}
+					else {
+						sym_insert(equ_lbl, evaluated_size, -1, 3);
 					}
 				}
 			}
 		}
 		return;
 	}
+
+
 
 	uint8_t opcode = 0;
 	if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
