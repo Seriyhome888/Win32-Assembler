@@ -381,6 +381,41 @@ void assemble_line(char* line) {
 		return;
 	}
 
+	// --- INTEGRATED SIGNED MULTIPLICATION & DIVISION (imul / idiv) ---
+	if (strcmp(cmd, "imul") == 0) {
+		int dst = get_reg_id(tokens[1]);
+		int src = get_reg_id(tokens[2]);
+
+		if (dst >= 0 && src >= 0) {
+			// Two-operand form: imul dst, src (e.g., imul eax, ecx)
+			emit_byte(0x0F);
+			emit_byte(0xAF);
+			emit_byte(0xC0 + (dst * 8) + src);
+		}
+		else if (dst >= 0 && !tokens[2]) {
+			// Single-operand form: imul reg (e.g., imul ecx)
+			emit_byte(0xF7);
+			emit_byte(0xE8 + dst); // /5 ModR/M extension
+		}
+		else {
+			printf("Assembler Error: 'imul' expects 1 or 2 register operands.\n");
+		}
+		return;
+	}
+
+	if (strcmp(cmd, "idiv") == 0) {
+		int r = get_reg_id(tokens[1]);
+		if (r >= 0) {
+			emit_byte(0xF7);
+			emit_byte(0xF8 + r); // /7 ModR/M extension
+		}
+		else {
+			printf("Assembler Error: 'idiv' requires a 32-bit register operand.\n");
+		}
+		return;
+	}
+
+	if (strcmp(cmd, "cdq") == 0) { emit_byte(0x99); return; }
 
 	if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
 		int dst = get_reg_id(tokens[1]);
