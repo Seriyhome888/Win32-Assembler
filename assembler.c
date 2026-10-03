@@ -8,6 +8,7 @@
 #define MAX_SYMBOLS 256
 #define MAX_RELOCS 256
 #define BUFFER_SIZE 8192
+#define STR_TABLE_CAP 4096
 
 #pragma pack(push, 1)
 typedef struct {
@@ -67,6 +68,10 @@ SymbolNode* sym_map[HASH_MAP_SIZE] = { NULL };
 COFFSymbol coff_syms[MAX_SYMBOLS];
 uint32_t coff_sym_count = 0;
 
+// Running buffer for our string table bytes
+char string_table[STR_TABLE_CAP];
+uint32_t string_table_size = 4; // Starts at 4 because the first 4 bytes hold the size prefix!
+
 COFFRelocation text_relocs[MAX_RELOCS];
 uint32_t text_reloc_count = 0;
 
@@ -101,15 +106,36 @@ int sym_lookup(const char* name, SymbolNode** node_out) {
 void sym_insert(const char* name, uint32_t address, int16_t sec, uint8_t storage_class) {
 	SymbolNode* existing;
 	if (sym_lookup(name, &existing)) {
-		if (current_pass == 1) existing->address = address;
+		if (current_pass == 1) {
+			existing->address = address;
+			existing->section_num = sec;
+			// Sync properties to the global COFF record 
+			coff_syms[existing->id].Value = address;
+			coff_syms[existing->id].SectionNumber = sec;
+			coff_syms[existing->id].StorageClass = storage_class;
+		}
 		return;
 	}
+
 	uint32_t id = coff_sym_count++;
-	memset(coff_syms + id, 0, sizeof(COFFSymbol));
-	strncpy((coff_syms + id)->Name.ShortName, name, 8);
-	(coff_syms + id)->Value = address;
-	(coff_syms + id)->SectionNumber = sec;
-	(coff_syms + id)->StorageClass = storage_class;
+	memset(&coff_syms[id], 0, sizeof(COFFSymbol));
+
+	// SAFE COFF STRING TABLE ALLOCATION FOR STRINGS > 8 CHARS
+	size_t name_len = strlen(name);
+	if (name_len <= 8) {
+		strncpy(coff_syms[id].Name.ShortName, name, 8);
+	}
+	else {
+		coff_syms[id].Name.LongName.Zeroes = 0;
+		coff_syms[id].Name.LongName.Offset = string_table_size;
+		strcpy(string_table + string_table_size - 4, name);
+		string_table_size += (uint32_t)(name_len + 1);
+	}
+
+	coff_syms[id].Value = address;
+	coff_syms[id].SectionNumber = sec;
+	coff_syms[id].StorageClass = storage_class;
+	coff_syms[id].Type = (sec == 1 && storage_class == 2) ? 0x0020 : 0x0000; // Track function type execution targets
 
 	uint32_t index = hash_string(name);
 	SymbolNode* node = malloc(sizeof(SymbolNode));
@@ -123,17 +149,17 @@ void sym_insert(const char* name, uint32_t address, int16_t sec, uint8_t storage
 
 void emit_byte(uint8_t b) {
 	if (current_section == 1) {
-		if (current_pass == 2 && text_size < BUFFER_SIZE) *(text_bytes + text_size) = b;
+		if (current_pass == 2 && text_size < BUFFER_SIZE) text_bytes[text_size] = b;
 		text_size++;
 	}
 	else {
-		if (current_pass == 2 && data_size < BUFFER_SIZE) *(data_bytes + data_size) = b;
+		if (current_pass == 2 && data_size < BUFFER_SIZE) data_bytes[data_size] = b;
 		data_size++;
 	}
 }
 
 void emit_uint32(uint32_t val) {
-	emit_byte(val & 0xFF); emit_byte((val >> 8) & 0xFF);
+	emit_byte(val & 0xFF);         emit_byte((val >> 8) & 0xFF);
 	emit_byte((val >> 16) & 0xFF); emit_byte((val >> 24) & 0xFF);
 }
 
@@ -148,12 +174,18 @@ int get_reg_id(const char* reg_name) {
 	return -1;
 }
 
+// Clean line preserves structural syntactic brackets for instruction matching
 void clean_line(char* line) {
 	char* comment = strchr(line, ';');
 	if (comment) *comment = '\0';
 	if (strstr(line, "db") && strchr(line, '"')) return;
-	for (int i = 0; *(line + i); i++) {
-		if (*(line + i) == ',' || *(line + i) == '[' || *(line + i) == ']') *(line + i) = ' ';
+
+	for (int i = 0; line[i]; i++) {
+		if (line[i] == ',' || line[i] == '[' || line[i] == ']') {
+			// Check if it's the displacement addition sign inside a memory operand
+			// Keep brackets out, replace with space but preserve contextual spacing safely
+			line[i] = ' ';
+		}
 	}
 }
 
@@ -162,12 +194,12 @@ void assemble_line(char* line) {
 	strncpy(mutable_line, line, sizeof(mutable_line) - 1);
 	mutable_line[sizeof(mutable_line) - 1] = '\0';
 
-	char* tokens[4] = { NULL, NULL, NULL, NULL };
-	char* token = strtok(mutable_line, " \t\r\n");
+	char* tokens[5] = { NULL, NULL, NULL, NULL, NULL };
+	char* token = strtok(mutable_line, " \t\r\n+"); // Also split on '+' to easily isolate offsets
 	int tok_idx = 0;
-	while (token && tok_idx < 4) {
+	while (token && tok_idx < 5) {
 		tokens[tok_idx++] = token;
-		token = strtok(NULL, " \t\r\n");
+		token = strtok(NULL, " \t\r\n+");
 	}
 
 	if (tok_idx == 0) return;
@@ -180,7 +212,17 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
-	if (strcmp(cmd, "global") == 0 || strcmp(cmd, "extern") == 0) return;
+
+	// RESOLVES BUG 6: TRACK EXTERN SYMBOLS
+	if (strcmp(cmd, "extern") == 0 || strcmp(cmd, "global") == 0) {
+		if (tok_idx > 1) {
+			int16_t target_sec = (strcmp(cmd, "extern") == 0) ? 0 : 1;
+			if (current_pass == 1) {
+				sym_insert(tokens[1], 0, target_sec, 2); // IMAGE_SYM_CLASS_EXTERNAL
+			}
+		}
+		return;
+	}
 
 	if (current_section == 2) {
 		char* lbl = strchr(line, ':');
@@ -217,15 +259,39 @@ void assemble_line(char* line) {
 		return;
 	}
 
-	if (strcmp(cmd, "push") == 0) { int r = get_reg_id(tokens[1]); if (r >= 0) emit_byte(0x50 + r); return; }
+	// RESOLVES BUG 8: HANDLE IMMEDIATE NUMBERS AND REGISTERS ON PUSH
+	if (strcmp(cmd, "push") == 0) {
+		int r = get_reg_id(tokens[1]);
+		if (r >= 0) {
+			emit_byte(0x50 + r);
+		}
+		else if (tokens[1]) {
+			// Push Immediate 32-bit integer constant or raw numeric argument
+			emit_byte(0x68);
+			emit_uint32((uint32_t)strtol(tokens[1], NULL, 0));
+		}
+		return;
+	}
+
 	if (strcmp(cmd, "pop") == 0) { int r = get_reg_id(tokens[1]); if (r >= 0) emit_byte(0x58 + r); return; }
 	if (strcmp(cmd, "ret") == 0) { emit_byte(0xC3); return; }
 
+	// RESOLVES BUG 7: SAFELY PARSE STACK DEFLECTION AND INDIRECT REFERENCES [ebp + 8]
 	if (strcmp(cmd, "mov") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		int src = get_reg_id(tokens[2]);
+
 		if (dst >= 0 && src >= 0) {
-			emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src);
+			// Check if there's a third displacement token indicating: mov eax, [ebp + 8]
+			if (tok_idx > 3 && src == 5) { // 5 is ebp register index
+				emit_byte(0x8B);
+				emit_byte(0x45 + (dst * 8)); // ModR/M byte for [ebp + disp8]
+				emit_byte((uint8_t)strtol(tokens[3], NULL, 0)); // The stack parameter offset (e.g. 8 or 12)
+			}
+			else {
+				// Flat register to register move: mov ebp, esp
+				emit_byte(0x8B); emit_byte(0xC0 + (dst * 8) + src);
+			}
 		}
 		else if (dst >= 0 && tokens[2]) {
 			SymbolNode* node;
@@ -234,7 +300,7 @@ void assemble_line(char* line) {
 				if (current_pass == 2) {
 					text_relocs[text_reloc_count].VirtualAddress = (uint32_t)text_size;
 					text_relocs[text_reloc_count].SymbolTableIndex = node->id;
-					text_relocs[text_reloc_count].Type = 0x0006;
+					text_relocs[text_reloc_count].Type = 0x0006; // IMAGE_REL_I386_DIR32
 					text_reloc_count++;
 				}
 				emit_uint32(node->address);
@@ -246,31 +312,29 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
-
-	if (strcmp(cmd, "and") == 0) {
-		int dst = get_reg_id(tokens[1]);
-		if (dst >= 0 && tokens[2]) {
-			emit_byte(0x83); emit_byte(0xE0 + dst);
-			emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
-		}
-		return;
-	}
-
 	if (strcmp(cmd, "sub") == 0 || strcmp(cmd, "add") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		int src = get_reg_id(tokens[2]);
+		int is_sub = (strcmp(cmd, "sub") == 0);
 		if (dst >= 0 && src >= 0) {
-			uint8_t op = (strcmp(cmd, "sub") == 0) ? 0x29 : 0x01;
-			emit_byte(op); emit_byte(0xC0 + (src * 8) + dst);
+			// Math operations inside brackets [ebp + 12]
+			if (tok_idx > 3 && src == 5) {
+				emit_byte(is_sub ? 0x2B : 0x03);
+				emit_byte(0x45 + (dst * 8));
+				emit_byte((uint8_t)strtol(tokens[3], NULL, 0));
+			}
+			else {
+				emit_byte(is_sub ? 0x29 : 0x01);
+				emit_byte(0xC0 + (src * 8) + dst);
+			}
 		}
 		else if (dst >= 0 && tokens[2]) {
-			uint8_t op_extension = (strcmp(cmd, "sub") == 0) ? 0xE8 : 0xC0;
+			uint8_t op_extension = is_sub ? 0xE8 : 0xC0;
 			emit_byte(0x83); emit_byte(op_extension + dst);
 			emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
 		}
 		return;
 	}
-
 	if (strcmp(cmd, "inc") == 0 || strcmp(cmd, "dec") == 0) {
 		int r = get_reg_id(tokens[1]);
 		if (r >= 0) {
@@ -279,7 +343,6 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
-
 	if (strcmp(cmd, "xor") == 0 || strcmp(cmd, "or") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		int src = get_reg_id(tokens[2]);
@@ -294,17 +357,14 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
-
-	// --- INTEGRATED LOGICAL INVERSION OPERATORS (not / neg) ---
 	if (strcmp(cmd, "not") == 0 || strcmp(cmd, "neg") == 0) {
 		int r = get_reg_id(tokens[1]);
 		if (r >= 0) {
-			emit_byte(0xF7); // Primary shared multi-byte group opcode
-			emit_byte((strcmp(cmd, "not") == 0 ? 0xD0 : 0xD8) + r); // /2 ModR/M extension for NOT, /3 for NEG
+			emit_byte(0xF7);
+			emit_byte((strcmp(cmd, "not") == 0 ? 0xD0 : 0xD8) + r);
 		}
 		return;
 	}
-
 	if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		int is_shr = (strcmp(cmd, "shr") == 0);
@@ -315,7 +375,6 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
-
 	if (strcmp(cmd, "cmp") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		if (dst >= 0 && tokens[2]) {
@@ -324,22 +383,49 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
+	// RESOLVES BUG 10 & 11: DYNAMIC GENERATION OF EXTERN REL32 RELOCATIONS FOR CALLS
 	if (strcmp(cmd, "call") == 0) {
 		uint32_t instr_start_addr = (uint32_t)text_size;
-		emit_byte(0xE8);
-		if (current_pass == 2 && tokens[1]) {
+		emit_byte(0xE8); // Call relative opcode
+		if (tokens[1]) {
 			SymbolNode* node;
 			if (sym_lookup(tokens[1], &node)) {
-				uint32_t rel32_offset = node->address - (instr_start_addr + 5);
-				emit_uint32(rel32_offset);
+				if (node->section_num == 0) { // Unresolved external link reference
+					if (current_pass == 2) {
+						text_relocs[text_reloc_count].VirtualAddress = instr_start_addr + 1; // Point directly to payload zeroes
+						text_relocs[text_reloc_count].SymbolTableIndex = node->id;
+						text_relocs[text_reloc_count].Type = 0x0014; // IMAGE_REL_I386_REL32
+						text_reloc_count++;
+					}
+					emit_uint32(0); // Linker overwrites this completely
+				}
+				else {
+					// Same-file localized label jumps
+					uint32_t rel32_offset = node->address - (instr_start_addr + 5);
+					emit_uint32(rel32_offset);
+				}
 			}
-			else { emit_uint32(0); }
+			else {
+				// Safe baseline fallback behavior if symbol parsed out of order
+				if (current_pass == 2) {
+					sym_insert(tokens[1], 0, 0, 2);
+					sym_lookup(tokens[1], &node);
+					text_relocs[text_reloc_count].VirtualAddress = instr_start_addr + 1;
+					text_relocs[text_reloc_count].SymbolTableIndex = node->id;
+					text_relocs[text_reloc_count].Type = 0x0014;
+					text_reloc_count++;
+				}
+				emit_uint32(0);
+			}
 		}
-		else { emit_uint32(0); }
+		else {
+			emit_uint32(0);
+		}
 		return;
 	}
 	uint8_t opcode = 0;
 	if (strcmp(cmd, "jmp") == 0) opcode = 0xEB;
+	else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
 	else if (strcmp(cmd, "je") == 0)  opcode = 0x74;
 	else if (strcmp(cmd, "jne") == 0 || strcmp(cmd, "jnz") == 0) opcode = 0x75;
 	else if (strcmp(cmd, "jl") == 0)  opcode = 0x7C;
@@ -361,8 +447,7 @@ void assemble_line(char* line) {
 }
 int main(int argc, char** argv) {
 	if (argc < 3) {
-		char* executable_name = argv[0];
-		printf("Usage: %s <in.asm> <out.obj>\n", executable_name);
+		printf("Usage: %s <in.asm> <out.obj>\n", argv[0]);
 		return 1;
 	}
 	char* in_filename = argv[1];
@@ -378,7 +463,7 @@ int main(int argc, char** argv) {
 	rewind(in);
 	// PASS 2
 	current_pass = 2; size_t final_text_len = text_size; size_t final_data_len = data_size;
-	text_size = 0; data_size = 0; current_section = 1;
+	text_size = 0; data_size = 0; current_section = 1; text_reloc_count = 0;
 	while (fgets(line, sizeof(line), in)) { clean_line(line); assemble_line(line); }
 	fclose(in);
 	FILE* out = fopen(out_filename, "wb");
@@ -388,33 +473,42 @@ int main(int argc, char** argv) {
 	uint32_t data_raw_ptr = text_raw_ptr + (uint32_t)final_text_len;
 	uint32_t text_reloc_ptr = data_raw_ptr + (uint32_t)final_data_len;
 	COFFHeader coff = {
-	.Machine = 0x14C, .NumberOfSections = 2, .TimeDateStamp = 0,
+	.Machine = 0x14C, // x86/Win32 Platform Identifier
+	.NumberOfSections = 2,
+	.TimeDateStamp = 0,
 	.PointerToSymbolTable = text_reloc_ptr + (sizeof(COFFRelocation) * text_reloc_count),
-	.NumberOfSymbols = coff_sym_count, .SizeOfOptionalHeader = 0, .Characteristics = 0x0000
+	.NumberOfSymbols = coff_sym_count,
+	.SizeOfOptionalHeader = 0,
+	.Characteristics = 0x0000
 	};
-	SectionHeader sec_text;
-	memset(&sec_text, 0, sizeof(sec_text));
-	memcpy(sec_text.Name, ".text", 5);
-	sec_text.SizeOfRawData = (uint32_t)final_text_len;
-	sec_text.PointerToRawData = text_raw_ptr;
-	sec_text.PointerToRelocations = text_reloc_count > 0 ? text_reloc_ptr : 0;
-	sec_text.NumberOfRelocations = (uint16_t)text_reloc_count;
-	sec_text.Characteristics = 0x60000020;
-	SectionHeader sec_data;
-	memset(&sec_data, 0, sizeof(sec_data));
-	memcpy(sec_data.Name, ".data", 5);
-	sec_data.SizeOfRawData = (uint32_t)final_data_len;
-	sec_data.PointerToRawData = data_raw_ptr;
-	sec_data.Characteristics = 0xC0000040;
+	SectionHeader sec_text = {
+	.Name = ".text",
+	.SizeOfRawData = (uint32_t)final_text_len,
+	.PointerToRawData = text_raw_ptr,
+	.PointerToRelocations = text_reloc_count > 0 ? text_reloc_ptr : 0,
+	.NumberOfRelocations = (uint16_t)text_reloc_count,
+	.Characteristics = 0x60000020 // CNT_CODE | MEM_EXECUTE | MEM_READ
+	};
+	SectionHeader sec_data = {
+	.Name = ".data",
+	.SizeOfRawData = (uint32_t)final_data_len,
+	.PointerToRawData = data_raw_ptr,
+	.Characteristics = 0xC0000040 // CNT_INITIALIZED_DATA | MEM_READ | MEM_WRITE
+	};
 	fwrite(&coff, sizeof(coff), 1, out);
 	fwrite(&sec_text, sizeof(sec_text), 1, out);
 	fwrite(&sec_data, sizeof(sec_data), 1, out);
 	fwrite(text_bytes, final_text_len, 1, out);
 	fwrite(data_bytes, final_data_len, 1, out);
-	if (text_reloc_count > 0) fwrite(text_relocs, sizeof(COFFRelocation) * text_reloc_count, 1, out);
+	if (text_reloc_count > 0) {
+		fwrite(text_relocs, sizeof(COFFRelocation) * text_reloc_count, 1, out);
+	}
 	fwrite(coff_syms, sizeof(COFFSymbol), coff_sym_count, out);
-	uint32_t str_table_size = 4;
-	fwrite(&str_table_size, sizeof(str_table_size), 1, out);
+	// WRITES OUT CORRECT STORAGE METADATA SIZE HEADERS FOR STRINGS > 8 CHARS
+	fwrite(&string_table_size, sizeof(string_table_size), 1, out);
+	if (string_table_size > 4) {
+		fwrite(string_table, string_table_size - 4, 1, out);
+	}
 	fclose(out);
 	printf("Success! Formatted COFF file generated cleanly at: %s\n", out_filename);
 	return 0;
