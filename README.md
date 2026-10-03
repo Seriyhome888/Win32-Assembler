@@ -26,7 +26,7 @@ Cross-file function invocations (e.g., call _AddTwoNumbers) cannot be evaluated 
 **3. COFF String Table Management**
 The core COFF symbol layout imposes a strict maximum boundary of 8 characters for inline identifier names (ShortName).
 * If an identifier name is 8 characters or fewer, it is written inline.
-* • For decorated identifiers longer than 8 characters (e.g., _AddTwoNumbers, _ExitProcess@4), the assembler forces compliance by assigning a special configuration: LongName.Zeroes = 0 and LongName.Offset = StringTableOffset. The full string label is safely offloaded to a tail-end **COFF String Table**, preventing name truncation and linking failures.
+* For decorated identifiers longer than 8 characters (e.g., _AddTwoNumbers, _ExitProcess@4), the assembler forces compliance by assigning a special configuration: LongName.Zeroes = 0 and LongName.Offset = StringTableOffset. The full string label is safely offloaded to a tail-end **COFF String Table**, preventing name truncation and linking failures.
 
 **4. Absolute Constant Separation**
 To support dynamic sizing calculations using the location counter (e.g., MyStringLen: equ $ - MyString), the assembler implements the absolute section layout flag **IMAGE_SYM_ABSOLUTE (-1)**. When an absolute symbol is evaluated, it is cached in the symbol map with a section marker of -1. This instructs the instruction encoders to emit its raw immediate integer directly into fields (like mov eax, MyStringLen) without generating an unnecessary relocation record.
