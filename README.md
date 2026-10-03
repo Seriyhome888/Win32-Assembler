@@ -19,7 +19,9 @@ Cross-file function invocations (e.g., call _AddTwoNumbers) cannot be evaluated 
 * To resolve this, Pass 2 emits a 4-byte little-endian placeholder payload (00 00 00 00) inside the bytecode stream.
 
 * It then creates and appends an active entry to the **COFFRelocation** table with the type **IMAGE_REL_I386_REL32 (0x0014)**. This tells the Windows Linker (link.exe) to compute the final jump offset at build time using the formula:
-  **Target Address - Relocation Position - 4**
+  ```
+  Target Address - Relocation Position - 4
+  ```
 
 **3. COFF String Table Management**
 The core COFF symbol layout imposes a strict maximum boundary of 8 characters for inline identifier names (ShortName).
