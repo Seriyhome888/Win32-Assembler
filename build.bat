@@ -25,6 +25,7 @@ assembler.exe test_call.asm test_call.obj
 assembler.exe test_neg.asm test_neg.obj
 assembler.exe test_math.asm test_math.obj
 assembler.exe test_signed.asm test_signed.obj
+assembler.exe test_cmp.asm test_cmp.obj
 
 linker.exe math_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" math_test.obj
 linker.exe loop_app.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" loop_test.obj
@@ -40,6 +41,7 @@ linker.exe test_call.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.2610
 linker.exe test_neg.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_neg.obj
 linker.exe test_math.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_math.obj
 linker.exe test_signed.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_signed.obj
+linker.exe test_cmp.exe 1 "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x86\kernel32.lib" test_cmp.obj
 
 math_app.exe
 echo %errorlevel%
@@ -81,4 +83,7 @@ test_math.exe
 echo %errorlevel%
 
 test_signed.exe
+echo %errorlevel%
+
+test_cmp.exe
 echo %errorlevel%

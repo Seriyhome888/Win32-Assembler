@@ -427,14 +427,29 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
+
+	// --- UPGRADED COMPARISON TESTING (cmp) ---
 	if (strcmp(cmd, "cmp") == 0) {
 		int dst = get_reg_id(tokens[1]);
-		if (dst >= 0 && tokens[2]) {
-			emit_byte(0x83); emit_byte(0xF8 + dst);
+		int src = get_reg_id(tokens[2]);
+
+		if (dst >= 0 && src >= 0) {
+			// Register-to-register comparison: cmp eax, ecx
+			emit_byte(0x39);
+			emit_byte(0xC0 + (src * 8) + dst);
+		}
+		else if (dst >= 0 && tokens[2]) {
+			// Register-to-immediate comparison: cmp eax, 10
+			emit_byte(0x83);
+			emit_byte(0xF8 + dst); // /7 ModR/M extension
 			emit_byte((uint8_t)strtol(tokens[2], NULL, 0));
+		}
+		else {
+			printf("Assembler Error: 'cmp' expects a register compared to a register or immediate value.\n");
 		}
 		return;
 	}
+
 	// RESOLVES BUG 10 & 11: DYNAMIC GENERATION OF EXTERN REL32 RELOCATIONS FOR CALLS
 	if (strcmp(cmd, "call") == 0) {
 		uint32_t instr_start_addr = (uint32_t)text_size;
