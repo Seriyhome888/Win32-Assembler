@@ -365,6 +365,23 @@ void assemble_line(char* line) {
 		}
 		return;
 	}
+
+	// --- INTEGRATED MULTIPLICATION & DIVISION (mul / div) ---
+	if (strcmp(cmd, "mul") == 0 || strcmp(cmd, "div") == 0) {
+		int r = get_reg_id(tokens[1]);
+		if (r >= 0) {
+			emit_byte(0xF7); // Shared group 3 primary opcode
+			// mul uses /4 extension (0xE0 + reg), div uses /6 extension (0xF0 + reg)
+			uint8_t modrm_extension = (strcmp(cmd, "mul") == 0) ? 0xE0 : 0xF0;
+			emit_byte(modrm_extension + r);
+		}
+		else {
+			printf("Assembler Error: '%s' currently only supports 32-bit register operands.\n", cmd);
+		}
+		return;
+	}
+
+
 	if (strcmp(cmd, "shl") == 0 || strcmp(cmd, "shr") == 0) {
 		int dst = get_reg_id(tokens[1]);
 		int is_shr = (strcmp(cmd, "shr") == 0);
