@@ -226,24 +226,70 @@ void assemble_line(char* line) {
 
 	if (current_section == 2) {
 		char* lbl = strchr(line, ':');
+		char* payload = line;
+
 		if (lbl) {
 			*lbl = '\0';
 			char lbl_name[64] = { 0 };
 			if (sscanf(line, "%63s", lbl_name) > 0) {
-				if (current_pass == 1) sym_insert(lbl_name, (uint32_t)data_size, 2, 3);
-				char* payload = lbl + 1;
-				char op[32] = { 0 };
-				sscanf(payload, "%31s", op);
-				if (strcmp(op, "db") == 0) {
-					char* str_start = strchr(payload, '"');
-					if (str_start) {
-						char* str_end = strchr(str_start + 1, '"');
-						if (str_end) {
-							for (char* c = str_start + 1; c < str_end; c++) emit_byte((uint8_t)*c);
-						}
-					}
-					if (strstr(payload, ", 0") || strstr(payload, ",0")) emit_byte(0x00);
+				if (current_pass == 1) {
+					sym_insert(lbl_name, (uint32_t)data_size, 2, 3); // Section 2, Storage Class 3 (Static/Data)
 				}
+			}
+			payload = lbl + 1;
+		}
+
+		// Tokenize the payload elements inside the data line
+		char mutable_payload[256];
+		strncpy(mutable_payload, payload, sizeof(mutable_payload) - 1);
+		mutable_payload[sizeof(mutable_payload) - 1] = '\0';
+
+		char* data_tokens[16] = { NULL };
+		char* d_tok = strtok(mutable_payload, " \t\r\n,");
+		int d_idx = 0;
+		while (d_tok && d_idx < 16) {
+			data_tokens[d_idx++] = d_tok;
+			d_tok = strtok(NULL, " \t\r\n,");
+		}
+
+		if (d_idx < 2) return; // Needs at least an operation directive and one argument
+		char* data_cmd = data_tokens[0];
+
+		// 1. CHOOSE DIRECTIVE: db (1 byte), dw (2 bytes), dd (4 bytes)
+		if (strcmp(data_cmd, "db") == 0) {
+			// Check if it's a quoted string literal first
+			char* str_start = strchr(payload, '"');
+			if (str_start) {
+				char* str_end = strchr(str_start + 1, '"');
+				if (str_end) {
+					for (char* c = str_start + 1; c < str_end; c++) {
+						emit_byte((uint8_t)*c);
+					}
+					// If the text line ends explicitly with a trailing null specifier
+					if (strstr(str_end, "0") || strstr(str_end, "0x00")) {
+						emit_byte(0x00);
+					}
+				}
+			}
+			else {
+				// Otherwise treat it as a sequence of raw numeric byte constants
+				for (int i = 1; i < d_idx; i++) {
+					uint8_t val = (uint8_t)strtol(data_tokens[i], NULL, 0);
+					emit_byte(val);
+				}
+			}
+		}
+		else if (strcmp(data_cmd, "dw") == 0) {
+			for (int i = 1; i < d_idx; i++) {
+				uint16_t val = (uint16_t)strtol(data_tokens[i], NULL, 0);
+				emit_byte(val & 0xFF);
+				emit_byte((val >> 8) & 0xFF);
+			}
+		}
+		else if (strcmp(data_cmd, "dd") == 0) {
+			for (int i = 1; i < d_idx; i++) {
+				uint32_t val = (uint32_t)strtol(data_tokens[i], NULL, 0);
+				emit_uint32(val); // Reuses your little-endian uint32 emitter
 			}
 		}
 		return;
